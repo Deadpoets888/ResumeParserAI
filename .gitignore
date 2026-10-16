@@ -1,11 +1,5 @@
-# Virtual environments
+# Virtual environment (root-level)
 .venv/
-venv/
-env/
-
-# Python bytecode
-__pycache__/
-*.py[cod]
 
 # Environment variables
 .env
@@ -18,9 +12,10 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Uploaded files
+# Uploaded resume PDFs
 backend/uploads/
-INTERVIEW_GUIDE_RESUME_ALIGNED.md 
-INTERVIEW_GUIDE.md
 
+# Docs not committed to repo
+INTERVIEW_GUIDE_RESUME_ALIGNED.md
+INTERVIEW_GUIDE.md
 ROADMAP.md

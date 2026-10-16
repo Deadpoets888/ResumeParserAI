@@ -128,8 +128,7 @@ media/
 tmp/
 temp/
 
-# Uploaded resume PDFs
-uploads/
+
 
 # Root-level venv
 ../.venv/
