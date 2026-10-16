@@ -128,4 +128,8 @@ media/
 tmp/
 temp/
 
-mayank x vanshika
+# Uploaded resume PDFs
+uploads/
+
+# Root-level venv
+../.venv/

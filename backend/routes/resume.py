@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status,BackgroundTasks, File, UploadFile, Form
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, status,BackgroundTasks, File, UploadFile, Form
+from sqlalchemy.orm import Session 
 from typing import Dict,Any
 from database import get_db
 import shutil
@@ -184,7 +184,7 @@ def _prepare_generation_text(data: dict) -> str:
     
     # Handle cases where any expected list is None
     skills = data.get('Skills', []) or []
-    work_experience = data.get('Work_experience', []) or []
+    work_experience = data.get('Work Experience', data.get('Work_experience', [])) or []
     education = data.get('Education', []) or []
     certifications = data.get('Certifications', []) or []
     projects = data.get('Projects', []) or []
@@ -324,16 +324,15 @@ def get_travel_resume_by_id(db: Session, resume_id: int):
 @router.post("/search-resume/")
 async def process_resume_search_rag(request: SearchRequest, db: Session = Depends(get_db)):
     """
-    Process a resume search request and send results by email.
+    Process a resume search request and return the best matching resume.
     """
 
     try:
-            
-        # Generate tags from user prompt # Is this the best method?
+        # Generate embeddings from user prompt
         print(f"Generating embeddings from user prompt: {request.user_prompt}")
         user_embeddings = generate_embeddings(request.user_prompt)
         
-        # Match tags against shortlisted tours
+        # Match embeddings against Pinecone database
         print("Comparing against pinecone database")
         matched_result_ids = match_embeddings(user_embeddings)
         
@@ -341,10 +340,15 @@ async def process_resume_search_rag(request: SearchRequest, db: Session = Depend
             print("No suitable matches found after tag matching")
             return {"message": "No suitable matches found for your preferences"}
         
-        # Fetch all matched travel resume from DB
+        # Fetch all matched resumes from DB
         matched_resume = [get_travel_resume_by_id(db, match_id) for match_id in matched_result_ids]
+        # Filter out any None results (IDs not found in DB)
+        matched_resume = [r for r in matched_resume if r is not None]
 
-        # Convert matched resume to ResumeCreate objects
+        if not matched_resume:
+            return {"message": "No suitable matches found for your preferences"}
+
+        # Convert matched resumes to ResumeCreate objects
         resume_objects = []
         for resume in matched_resume:
             resume_data = {
@@ -360,68 +364,86 @@ async def process_resume_search_rag(request: SearchRequest, db: Session = Depend
                 "model_type": resume.model_type
             }
             resume_objects.append(ResumeCreate(**resume_data))
-        
-            # Extract relevant info from user prompt
-            extracted_prompt_info = extract_prompt_info(request.user_prompt)
 
-            # Query extracted user prompt information against resumes
-            print("Quering against the user prompt with specificty")
-            matching_resumes = []
-            for resume in resume_objects:
-                match_score = 0
-                
-                if extracted_prompt_info.get("skills"):
-                    for i in resume.skills:
-                        if isinstance(resume.skills[i], list):
-                            match_score += len(set(extracted_prompt_info["skills"]) & set(resume.skills[i]))
-                        else:
-                            match_score += len(set(extracted_prompt_info["skills"]) & set([resume.skills[i]]))
-                
-                if extracted_prompt_info.get("work_experience"):
-                    for i in resume.work_experience:
-                        for e in i:
-                            if isinstance(i[e], list):
-                                match_score += len(set(extracted_prompt_info["work_experience"]) & set(i[e]))
-                            else:
-                                match_score += len(set(extracted_prompt_info["work_experience"]) & set([i[e]]))
-                
-                if extracted_prompt_info.get("education"):
-                    for i in resume.education:
-                        for e in i:
-                            if isinstance(i[e], list):
-                                match_score += len(set(extracted_prompt_info["education"]) & set(i[e]))
-                            else:
-                                match_score += len(set(extracted_prompt_info["education"]) & set([i[e]]))
-                
-                if extracted_prompt_info.get("certifications"):
-                    for i in resume.certifications:
-                        for e in i:
-                            if isinstance(i[e], list):
-                                match_score += len(set(extracted_prompt_info["certifications"]) & set(i[e]))
-                            else:
-                                match_score += len(set(extracted_prompt_info["certifications"]) & set([i[e]]))
-                
-                if extracted_prompt_info.get("projects"):
-                    for i in resume.projects:
-                        for e in i:
-                            if isinstance(i[e], list):
-                                match_score += len(set(extracted_prompt_info["projects"]) & set(i[e]))
-                            else:
-                                match_score += len(set(extracted_prompt_info["projects"]) & set([i[e]]))
+        # Extract relevant info from user prompt (done once, outside the loop)
+        extracted_prompt_info = extract_prompt_info(request.user_prompt)
 
-                    
-                if extracted_prompt_info.get("gpa") and resume.gpa:
-                    match_score += 1 if int(extracted_prompt_info["gpa"]) >= int(resume.gpa) else 0
-                
-                print("match_score :",match_score)
-                matching_resumes.append((match_score, resume))
+        def _extract_values_from_field(field) -> list:
+            """Flatten a field (dict, list of dicts, or list of strings) into a flat list of strings."""
+            values = []
+            if isinstance(field, dict):
+                for v in field.values():
+                    if isinstance(v, list):
+                        values.extend([str(x).lower() for x in v])
+                    else:
+                        values.append(str(v).lower())
+            elif isinstance(field, list):
+                for item in field:
+                    if isinstance(item, dict):
+                        for v in item.values():
+                            if isinstance(v, list):
+                                values.extend([str(x).lower() for x in v])
+                            else:
+                                values.append(str(v).lower())
+                    else:
+                        values.append(str(item).lower())
+            return values
 
-            # Sort resumes by highest match score
-            matching_resumes.sort(reverse=True, key=lambda x: x[0])
+        # Score each resume against the extracted prompt info
+        print("Scoring resumes against the user prompt")
+        matching_resumes = []
+        for resume in resume_objects:
+            match_score = 0
 
-            # Return best-matching resumes
-            print("Reume with best match -> email:",matching_resumes[0][1].email)
-            return matching_resumes[0][1]
+            # Skills matching
+            if extracted_prompt_info.get("skills") and resume.skills:
+                prompt_skills = [s.lower() for s in extracted_prompt_info["skills"]]
+                resume_skills = _extract_values_from_field(resume.skills)
+                match_score += len(set(prompt_skills) & set(resume_skills))
+
+            # Work experience matching
+            if extracted_prompt_info.get("work_experience") and resume.work_experience:
+                prompt_we = [s.lower() for s in extracted_prompt_info["work_experience"]]
+                resume_we = _extract_values_from_field(resume.work_experience)
+                match_score += len(set(prompt_we) & set(resume_we))
+
+            # Education matching
+            if extracted_prompt_info.get("education") and resume.education:
+                prompt_edu = [s.lower() for s in extracted_prompt_info["education"]]
+                resume_edu = _extract_values_from_field(resume.education)
+                match_score += len(set(prompt_edu) & set(resume_edu))
+
+            # Certifications matching
+            if extracted_prompt_info.get("certifications") and resume.certifications:
+                prompt_cert = [s.lower() for s in extracted_prompt_info["certifications"]]
+                resume_cert = _extract_values_from_field(resume.certifications)
+                match_score += len(set(prompt_cert) & set(resume_cert))
+
+            # Projects matching
+            if extracted_prompt_info.get("projects") and resume.projects:
+                prompt_proj = [s.lower() for s in extracted_prompt_info["projects"]]
+                resume_proj = _extract_values_from_field(resume.projects)
+                match_score += len(set(prompt_proj) & set(resume_proj))
+
+            # GPA matching (use float to handle values like "3.8")
+            if extracted_prompt_info.get("gpa") and resume.gpa:
+                try:
+                    prompt_gpa = float(extracted_prompt_info["gpa"])
+                    resume_gpa = float(resume.gpa)
+                    match_score += 1 if resume_gpa >= prompt_gpa else 0
+                except (ValueError, TypeError):
+                    pass  # Ignore GPA comparison if conversion fails
+
+            print(f"match_score for {resume.name}: {match_score}")
+            matching_resumes.append((match_score, resume))
+
+        # Sort resumes by highest match score
+        matching_resumes.sort(reverse=True, key=lambda x: x[0])
+
+        # Return best-matching resume
+        best_match = matching_resumes[0][1]
+        print(f"Best matching resume -> name: {best_match.name}, email: {best_match.email}")
+        return best_match
         
     except Exception as e:
         print(f"Error processing search request: {str(e)}")

@@ -19,7 +19,8 @@ function UploadForm() {
 
     setLoading(true);
     try {
-      await axios.post("http://localhost:8000/api/v1/resume/", formData, {
+      const apiUrl = process.env.REACT_APP_API_URL || "http://localhost:8000";
+      await axios.post(`${apiUrl}/api/v1/resume/`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       navigate("/thank-you"); // Redirect to thank you page

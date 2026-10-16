@@ -17,13 +17,13 @@ DB_HOST = os.getenv("POSTGRES_HOST")
 DB_PORT = os.getenv("POSTGRES_PORT")
 DB_NAME = os.getenv("POSTGRES_DB")
 
-# Database URLs
-ADMIN_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/postgres"
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Database URLs (sslmode=require is needed for Neon cloud PostgreSQL)
+ADMIN_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/postgres?sslmode=require"
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
 
 # Create engines
-admin_engine = create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT")
-engine = create_engine(DATABASE_URL)
+admin_engine = create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT", connect_args={"sslmode": "require"})
+engine = create_engine(DATABASE_URL, connect_args={"sslmode": "require"})
 
 # Session makers
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -1,18 +1,18 @@
 import fitz  # PyMuPDF for PDF text extraction
 import json
 import os
-from openai import OpenAI
+from google import genai
 
-# Initialize OpenAI client
-api_key = os.getenv('OPENAI_API_KEY')
-if not api_key:
-    raise ValueError("Missing OpenAI API key. Set 'OPENAI_API_KEY' in the environment.")
+# Initialize Gemini client
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("Missing Gemini API key. Set 'GEMINI_API_KEY' in the environment.")
 
-client = OpenAI(api_key=api_key)
-print("[INFO] OpenAI client initialized successfully.")
+client = genai.Client(api_key=GEMINI_API_KEY)
+print("[INFO] Gemini client initialized successfully.")
 
 def extract_resume_data_and_structure(pdf_path):
-    """Extracts text from a PDF resume and processes it with GPT-4 Turbo to return structured JSON."""
+    """Extracts text from a PDF resume and processes it with Gemini Flash to return structured JSON."""
     
     try:
 
@@ -31,7 +31,7 @@ def extract_resume_data_and_structure(pdf_path):
 
         # Define the prompt
         prompt = f"""
-        Extract the following details from this resume and return JSON:
+        Extract the following details from this resume and return ONLY valid JSON (no markdown, no code fences):
         - Name
         - Email
         - Phone Number
@@ -46,33 +46,38 @@ def extract_resume_data_and_structure(pdf_path):
         {extracted_text}
         """
 
-        print("[INFO] Sending extracted text to GPT-4 Turbo for processing...")
+        print("[INFO] Sending extracted text to Gemini Flash for processing...")
 
-        # Call GPT-4 Turbo
+        # Call Gemini Flash
         try:
-            response = client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[
-                    {"role": "system", "content": "You extract structured information from resumes and return JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config={
+                    "system_instruction": "You extract structured information from resumes and return ONLY raw JSON with no markdown or code fences.",
+                    "temperature": 0,
+                }
             )
         except Exception as e:
-            raise RuntimeError(f"Error calling OpenAI API: {str(e)}")
+            raise RuntimeError(f"Error calling Gemini API: {str(e)}")
 
-        print("[INFO] Received response from GPT-4 Turbo.")
+        print("[INFO] Received response from Gemini Flash.")
 
         # Parse JSON response
         try:
-            structured_data = json.loads(response.choices[0].message.content.strip("```json\n").rstrip("\n```"))
+            raw = response.text.strip()
+            # Strip markdown code fences if Gemini wraps anyway
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            structured_data = json.loads(raw.strip())
             print("[INFO] Successfully parsed structured data.")
         except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse GPT response. Error: {str(e)}")
+            raise ValueError(f"Failed to parse Gemini response as JSON. Error: {str(e)}\nRaw: {response.text[:300]}")
 
         return structured_data
 
     except Exception as e:
         print(f"[ERROR] {str(e)}")
         return {"error": str(e)}
-

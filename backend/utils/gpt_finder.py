@@ -1,10 +1,10 @@
-from openai import OpenAI
 import os
+import json
+from google import genai
 from typing import List, Dict, Any, Optional
 
-client = OpenAI(
-    api_key=os.getenv('OPENAI_API_KEY'),
-)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 def extract_prompt_info(description: str) -> Dict[str, Any]:
     print("Generating information based on user prompt")
@@ -24,23 +24,32 @@ If a field is not mentioned, return it as an empty list.
     User Prompt:
     {description}
     
-    Return the extracted information in JSON format without explanations or extra text.
+    Return ONLY raw JSON (no markdown, no code fences, no explanation). Example format:
+    {{"Skills": [], "Work_experience": [], "Education": [], "Certifications": [], "Projects": [], "Gpa": "0"}}
     """
     
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are an expert in analyzing user descriptions to extract resume-related information."},
-            {"role": "user", "content": prompt}
-        ]
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
+        config={
+            "system_instruction": "You are an expert in analyzing user descriptions to extract resume-related information. Return ONLY raw JSON.",
+            "temperature": 0,
+        }
     )
     
-    extracted_data = response.choices[0].message.content.strip()
-    print(extracted_data)
-    
+    raw = response.text.strip()
+    # Strip markdown code fences if Gemini wraps anyway
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+
+    print(raw)
+
     try:
-        resume_info = eval(extracted_data) if extracted_data.startswith("{") else {}
-    except Exception:
+        resume_info = json.loads(raw) if raw.startswith("{") else {}
+    except (json.JSONDecodeError, Exception):
         resume_info = {}
     
     return {
@@ -50,4 +59,4 @@ If a field is not mentioned, return it as an empty list.
         "certifications": resume_info.get("Certifications", []),
         "projects": resume_info.get("Projects", []),
         "gpa": resume_info.get("Gpa", "0")
-    }
+    }

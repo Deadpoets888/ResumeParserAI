@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+python-dotenv
+pydantic-settings
+pydantic
+python-multipart
+pinecone
+google-genai
+langchain
+PyMuPDF
+mistralai==1.0.0

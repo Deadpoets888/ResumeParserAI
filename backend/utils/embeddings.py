@@ -1,144 +1,171 @@
-import openai
-from pinecone import Pinecone, ServerlessSpec
-import uuid
-from typing import List
+import sys
 import os
+import uuid
+from typing import List, Optional
+from dotenv import load_dotenv
+from google import genai
+from pinecone import Pinecone
 
-# Initialize Pinecone
-PINECONE_API_KEY = os.getenv("PINECONE_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT") 
-INDEX_NAME = os.getenv("INDEX_NAME")
+load_dotenv()
 
-def init_pinecone():
-    """Initialize Pinecone connection and return index."""
+# Ensure emoji-heavy print() works on Windows consoles
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# ── Config ────────────────────────────────────────────────────────────────────
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+INDEX_NAME = os.getenv("INDEX_NAME", "resume-index")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Gemini's text-embedding-004 supports output_dimensionality.
+# Our Pinecone index was created with 512 dimensions, so we match that.
+EMBEDDING_DIMENSIONS = 512
+
+# ── Gemini Client ─────────────────────────────────────────────────────────────
+gemini_client: Optional[genai.Client] = None
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    print("[✅] Gemini client initialized.")
+else:
+    print("[⚠️] GEMINI_API_KEY not found. Embedding generation will fail.")
+
+# ── Pinecone (lazy singleton) ─────────────────────────────────────────────────
+_pinecone_index = None
+
+def get_pinecone_index():
+    """Lazily connect to Pinecone and return the index. Returns None on failure."""
+    global _pinecone_index
+    if _pinecone_index is not None:
+        return _pinecone_index
+
+    if not PINECONE_API_KEY:
+        print("[⚠️] PINECONE_API_KEY is not set.")
+        return None
+
     try:
-        # Initialize Pinecone client
         pc = Pinecone(api_key=PINECONE_API_KEY)
+        existing_indexes = [idx.name for idx in pc.list_indexes()]
 
-        # List existing indexes
-        existing_indexes = pc.list_indexes().names()
-
-        # Ensure the index exists before connecting
         if INDEX_NAME not in existing_indexes:
-            print(f"[⚠️] Index '{INDEX_NAME}' does not exist")
-            return
+            print(f"[⚠️] Pinecone index '{INDEX_NAME}' does not exist.")
+            return None
 
-        # Connect to the index
-        index = pc.Index(INDEX_NAME)
+        _pinecone_index = pc.Index(INDEX_NAME)
         print(f"[✅] Connected to Pinecone index: {INDEX_NAME}")
-        return index
+        return _pinecone_index
 
     except Exception as e:
-        print(f"[❌] Error initializing Pinecone: {e}")
+        print(f"[❌] Error connecting to Pinecone: {e}")
         return None
-    
-index = init_pinecone()
 
+
+# ── Embedding Generation ──────────────────────────────────────────────────────
 def generate_embeddings(text: str) -> List[float]:
     """
-    Generates an embedding for the given text using OpenAI.
-    
+    Generates a 512-dimensional embedding for the given text using Google Gemini
+    (text-embedding-004 with output_dimensionality=512 to match the Pinecone index).
+
     Args:
         text (str): The input text to embed.
-    
+
     Returns:
-        List[float]: A list of floating-point numbers representing the embedding.
+        List[float]: A list of floats representing the embedding, or [] on failure.
     """
-    try:
-        response = openai.embeddings.create(input=[text], model="text-embedding-3-large")
-        embedding = response.data[0].embedding
-        print(f"[✅] Successfully generated embedding for: '{text[:30]}...'")
-        return embedding
-    except Exception as e:
-        print(f"[❌] Error generating embedding: {e}")
+    if not text or not text.strip():
+        print("[⚠️] Empty text passed to generate_embeddings. Skipping.")
         return []
 
-import uuid
-from typing import Optional
+    if not gemini_client:
+        print("[❌] Gemini client not initialized. Check GEMINI_API_KEY.")
+        return []
 
-def store_embedding(text: str, id: int) -> int:
+    try:
+        response = gemini_client.models.embed_content(
+            model="text-embedding-004",
+            contents=text,
+            config={"output_dimensionality": EMBEDDING_DIMENSIONS},
+        )
+        embedding = response.embeddings[0].values
+        print(f"[✅] Generated Gemini embedding ({len(embedding)}-dim) for: '{text[:30]}...'")
+        return list(embedding)
+    except Exception as e:
+        print(f"[❌] Error generating Gemini embedding: {e}")
+        return []
+
+
+# ── Store Embedding ───────────────────────────────────────────────────────────
+def store_embedding(text: str, resume_id: int) -> int:
     """
-    Stores or updates an embedding in the Pinecone index with error handling.
+    Stores or updates an embedding in Pinecone.
+    Uses a deterministic vector ID ('resume_<id>') so Pinecone's native upsert
+    handles deduplication — no need for a separate query-before-upsert.
 
     Args:
         text (str): The input text to embed and store.
-        id (int): A unique identifier to associate with the embedding.
+        resume_id (int): The database ID of the resume.
 
     Returns:
-        int: 1 if success, 0 if failure.
+        int: 1 on success, 0 on failure.
     """
-    
+    index = get_pinecone_index()
     if index is None:
-        print("[⚠️] Pinecone index not initialized. Skipping storage.")
+        print("[⚠️] Pinecone index unavailable. Skipping storage.")
         return 0
 
     embedding = generate_embeddings(text)
-    
     if not embedding:
         print("[⚠️] Failed to generate embedding. Skipping storage.")
         return 0
-    
+
     try:
-        # Check if an embedding with the given "id" already exists
-        existing_results = index.query(vector=embedding, top_k=1, include_metadata=True)
-
-        existing_pinecone_id: Optional[str] = None
-        for match in existing_results["matches"]:
-            if match["metadata"].get("id") == str(id):
-                existing_pinecone_id = match["id"]
-                break
-
-        # Use the existing Pinecone ID if found, otherwise generate a new one
-        pinecone_id = existing_pinecone_id if existing_pinecone_id else str(uuid.uuid4())
-
-        # Upsert (update if exists, insert if not)
-        index.upsert(vectors=[(pinecone_id, embedding, {"text": text, "id": str(id)})])
-
-        if existing_pinecone_id:
-            print(f"[✅] Updated embedding with ID: {existing_pinecone_id}")
-        else:
-            print(f"[✅] Stored new embedding with ID: {pinecone_id}")
-
+        # Deterministic ID: upsert will update if the vector already exists,
+        # or insert if it's new — no pre-query needed.
+        vector_id = f"resume_{resume_id}"
+        index.upsert(vectors=[(vector_id, embedding, {"text": text, "id": str(resume_id)})])
+        print(f"[✅] Upserted embedding in Pinecone with ID: {vector_id}")
         return 1
     except Exception as e:
         print(f"[❌] Error storing embedding in Pinecone: {e}")
         return 0
 
-    
 
-def match_embeddings(user_embedding, top_k=3):
+# ── Match Embeddings ──────────────────────────────────────────────────────────
+def match_embeddings(user_embedding: List[float], top_k: int = 3) -> List[str]:
     """
     Matches the user_embedding against stored embeddings in Pinecone and returns
-    the index of the most similar match.
+    the IDs of the top matches.
 
-    Parameters:
-    - user_embedding (list): The query embedding.
-    - index (pinecone.Index): The Pinecone index to query.
-    - top_k (int): Number of top matches to retrieve (default is 1).
+    Args:
+        user_embedding (List[float]): The query embedding vector.
+        top_k (int): Number of top matches to retrieve (default 3).
 
     Returns:
-    - str: The ID of the highest similarity match.
+        List[str]: List of resume IDs (strings) for the top matches.
+                   Returns an empty list if no matches found or on error.
     """
-    
+    index = get_pinecone_index()
     if index is None:
-        print("[⚠️] Pinecone index not initialized. Skipping storage.")
-        return -1
-    
+        print("[⚠️] Pinecone index not initialized. Skipping match.")
+        return []
+
+    if not user_embedding:
+        print("[⚠️] Empty embedding passed to match_embeddings.")
+        return []
+
     try:
-        # Perform similarity search
         results = index.query(vector=user_embedding, top_k=top_k, include_metadata=True)
 
-        if results and results['matches']:
-            top_matches = results['matches']  
-            match_ids = [match['metadata']['id'] for match in top_matches]  # Extract IDs
-
+        if results and results.get("matches"):
+            match_ids = [
+                match["metadata"]["id"]
+                for match in results["matches"]
+                if "metadata" in match and "id" in match["metadata"]
+            ]
             print(f"[✅] Top {top_k} Matches: {match_ids}")
             return match_ids
-        else:
-            print("[⚠️] No matches found.")
-            return None
+
+        print("[⚠️] No matches found in Pinecone.")
+        return []
 
     except Exception as e:
         print(f"[❌] Error matching embeddings: {e}")
-        return -1
-
+        return []

@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
@@ -5,7 +6,7 @@ class ResumeBase(BaseModel):
     name: str
     email: str
     phone_number: Optional[str]
-    skills: Dict[str, Any]
+    skills: Any
     work_experience: Optional[List[Dict[str, Any]]]
     education: List[Dict[str, Any]]
     certifications: Optional[List[Dict[str, Any]]]
@@ -24,5 +25,6 @@ class ResumeResponse(ResumeBase):
 
 class SearchRequest(BaseModel):
     user_prompt: str
+
 
 

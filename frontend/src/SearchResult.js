@@ -66,9 +66,11 @@ function SearchResult() {
             <ul>
               {resume.certifications.map((cert, index) => (
                 <li key={index}>
-                    {Object.entries(cert).map(([key, value]) => (
-                    <p key={key}><strong>{key}:</strong> {value}</p>
-                  ))}
+                  {typeof cert === "string"
+                    ? cert
+                    : Object.entries(cert).map(([key, value]) => (
+                        <p key={key}><strong>{key}:</strong> {String(value)}</p>
+                      ))}
                 </li>
               ))}
             </ul>

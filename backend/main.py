@@ -36,10 +36,11 @@ class Settings(BaseSettings):
     
     # Include API keys and email credentials from .env
     mistral_api_key: str = ""
-    openai_api_key: str = ""
+    # openai_api_key: str = ""
+    gemini_api_key: str = ""
     pinecone_api_key:str
     index_name:str
-    pinecone_environment:str
+    pinecone_environment: str = ""
 
 
     
@@ -65,7 +66,7 @@ app = FastAPI(
 # Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=["*"], # Allow any origin for Vercel deployment
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,7 +76,7 @@ app.add_middleware(
 if not settings.debug:
     app.add_middleware(
         TrustedHostMiddleware, 
-        allowed_hosts=settings.allowed_hosts
+        allowed_hosts=["*"] # Allow all hosts on Vercel
     )
 
 # Request timing middleware
