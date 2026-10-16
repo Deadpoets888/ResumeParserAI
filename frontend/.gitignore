@@ -17,6 +17,7 @@
 .env.development.local
 .env.test.local
 .env.production.local
+.env
 
 npm-debug.log*
 yarn-debug.log*
@@ -26,3 +27,5 @@ INTERVIEW_GUIDE_RESUME_ALIGNED.md
 INTERVIEW_GUIDE.md
 
 ROADMAP.md
+uploads
+.venv
